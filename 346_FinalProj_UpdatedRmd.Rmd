@@ -1,0 +1,380 @@
+---
+title: "STAT 346 Final Project"
+subtitle: "Can Money Buy Happiness?: Understanding the Differential Between a Country’s GDP Rank and Happiness Rank"
+author: "Edith Edwards-Mizel, Varya Kluev, Greta Laesch"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo = FALSE, message = F, warning = F}
+library(pander)   
+library(car)  
+library(ggplot2)
+library(gridExtra)
+library(datasets)
+library(knitr)
+library(GGally)
+library(dplyr)
+library(readr)
+library(reshape2)
+library(kableExtra)
+```
+
+
+## Adding and Cleaning Data
+```{r, message=FALSE}
+# Explanatory Variables
+census_data <- read_csv("~/Desktop/export.csv", show_col_types = FALSE)
+who_data <- read_csv("~/Desktop/Annex 2-4-Table 1.csv", show_col_types = FALSE)
+gdp_data <- read_csv("~/Desktop/GDP_data.csv", show_col_types = FALSE)
+wh_data <- read_csv("~/Desktop/WHD.csv", show_col_types = FALSE)
+who_data <- who_data[-(1:4),]
+colnames(census_data)[4] ="country"
+colnames(who_data)[1] ="country"
+colnames(who_data)[2] ="Clean_energy_access_prop"
+colnames(who_data)[3] ="Harmful_air_mean_conc"
+colnames(who_data)[4] ="Mortality_homicide_rate"
+colnames(who_data)[5] ="Adult_obesity_rate"
+colnames(who_data)[6] ="Tobacco_use_rate"
+colnames(who_data)[7] ="Expenditure_health_perc"
+colnames(who_data)[8] ="Mortality_suicide_rate"
+colnames(who_data)[9] ="Alcohol_consuption_liters"
+df_merge <- merge(census_data,who_data, by = "country")
+df_merge <- df_merge[-c(2:5) ]
+
+# Categorical Variable
+hc_data <- read_csv("~/Desktop/UNHC.csv", show_col_types = FALSE)
+univ <- hc_data$country
+univ_var <- c()
+for (i in 1:nrow(df_merge)) {
+  ifelse(df_merge[i,1] %in% univ, univ_var[i] <- 1, univ_var[i] <- 0)
+}
+df_merge["Univ_hc"] <- univ_var
+df_merge$Univ_hc <- as.factor(df_merge$Univ_hc)
+
+# Covid Deaths
+covid_deaths <- read_csv("~/Desktop/covidData.csv", show_col_types = FALSE)
+# -- Cumulative Deaths from 01/03/2020-12/31/2022
+newest_covid <- covid_deaths[covid_deaths$Date_reported == "2022-12-31", ]
+cv_dummy_df <- data.frame(newest_covid$Country, newest_covid$Cumulative_deaths)
+colnames(cv_dummy_df)[1] <- "country"
+colnames(cv_dummy_df)[2] <- "tot_deaths"
+df_merge <- merge(df_merge, cv_dummy_df, by = "country")
+
+# Corruption
+cpi_data <- read_csv("~/Desktop/CPI.csv", show_col_types = FALSE)
+# -- Lower Scores == More Corruption
+cpi_data <- cpi_data[-(1:2),]
+cpi_dummy_df <- data.frame(cpi_data$`Corruption Perceptions Index 2022: Global scores`, cpi_data$...4)
+colnames(cpi_dummy_df)[1] <- "country"
+colnames(cpi_dummy_df)[2] <- "cpi_score"
+df_merge <- merge(df_merge, cpi_dummy_df, by = "country")
+df_merge$cpi_score <- as.numeric(df_merge$cpi_score)
+
+# Response Variable
+gdp_dummy_df <- data.frame(gdp_data$country, gdp_data$rank)
+colnames(gdp_dummy_df)[1] <- "country"
+colnames(gdp_dummy_df)[2] <- "GDP_rank"
+
+df_merge <- merge(df_merge, gdp_dummy_df, by = "country")
+
+wh_dummy_df <- data.frame(wh_data$country, wh_data$rank)
+colnames(wh_dummy_df)[1] <- "country"
+colnames(wh_dummy_df)[2] <- "WH_rank"
+
+df_merge <- merge(df_merge, wh_dummy_df, by = "country")
+
+df_merge$GDP_rank_std <- ((df_merge$GDP_rank) - mean(df_merge$GDP_rank))/sd(df_merge$GDP_rank)
+df_merge$WH_rank_std <- ((df_merge$WH_rank) - mean(df_merge$WH_rank))/sd(df_merge$WH_rank)
+
+df_merge["DIF_rank"] <- (df_merge$GDP_rank_std - df_merge$WH_rank_std)
+
+# Cleaning Data
+# Make missing data NA
+for (i in 1:length(df_merge)) { # columns
+  for (j in 1:nrow(df_merge)) { # rows
+    ifelse(df_merge[j,i] == "-", df_merge[j,i] <- NA, NA)
+  }
+}
+
+# Round <1 to 0
+for (i in 1:length(df_merge)) { # columns
+  for (j in 1:nrow(df_merge)) { # rows
+    ifelse(df_merge[j,i] == "<1" || df_merge[j,i] == "<0.1", df_merge[j,i] <- 0, NA)
+  }
+}
+
+# Convert Characters to Numeric
+for (i in (8:15)) {
+  df_merge[,i] <- as.numeric(df_merge[,i])
+}
+
+# Rename columns with spaces
+colnames(df_merge)[2:7] <- c("Population", "rate_nat_increase", "tot_fert_rate", "life_exp_males", "life_exp_females", "death_rate")
+attach(df_merge)
+
+
+
+
+
+#write.csv(df_merge, "/Users/Greta/Desktop/master_df.csv", row.names=TRUE)
+```
+
+## Goal: Understanding the Phenomenon in General
+
+### Exploratory Data Analysis  
+
+```{r, warning=FALSE}
+# Response Variables
+plot(WH_rank_std ~ GDP_rank_std)
+mod_1 <- lm(WH_rank_std~GDP_rank_std)
+summary(mod_1)
+res1 <- plot(residuals(mod_1) ~ fitted.values(mod_1))
+res1
+
+# Explanation: We can see that GDP explains some, but not all of variation in the happiness rating
+# of a country, so what else is there to explain why some countries are happier than others,
+# compared to 
+
+# Census Data Pairs
+ggpairs(df_merge[,c(2,3,4,5,6,7,23)])
+# WHO Data Pairs
+ggpairs(df_merge[,c(8,9,10,11,12,13,14,15,17,18,23)])
+
+```
+
+### Transformations
+```{r}
+par(mfrow=c(3,5))
+plot(DIF_rank~Population)
+plot(DIF_rank~rate_nat_increase)
+plot(DIF_rank~tot_fert_rate)
+plot(DIF_rank~life_exp_males)
+plot(DIF_rank~life_exp_females)
+plot(DIF_rank~death_rate)
+plot(DIF_rank~Clean_energy_access_prop)
+plot(DIF_rank~Harmful_air_mean_conc)
+plot(DIF_rank~Mortality_homicide_rate)
+plot(DIF_rank~Adult_obesity_rate)
+plot(DIF_rank~Tobacco_use_rate)
+plot(DIF_rank~Expenditure_health_perc)
+plot(DIF_rank~Alcohol_consuption_liters)
+plot(DIF_rank~Mortality_suicide_rate)
+plot(DIF_rank~cpi_score)
+
+# Transform Non-Linear Relationships as Necessary
+df_merge$PopulationT <- log(df_merge$Population)
+df_merge$tot_fert_rateT <- log(df_merge$tot_fert_rate)
+df_merge$Harmful_air_mean_concT <- log(df_merge$Harmful_air_mean_conc)
+df_merge$Mortality_homicide_rateT <- log(df_merge$Mortality_homicide_rate)
+df_merge$Mortality_suicide_rateT <- log(df_merge$Mortality_suicide_rate)
+df_merge$cpi_scoreT <- log(df_merge$cpi_score)
+```
+
+
+### Preliminary Data Analysis: Model Selection Using Automatic Selection Procedure
+```{r, warning=FALSE}
+df_merge_noNA <- na.omit(df_merge)
+# Original Model Before Transformations
+myformula <- formula(paste(colnames(df_merge)[23], paste(colnames(df_merge_noNA)[2:18], collapse = "+"), sep = " ~ "))
+mod_noT <- lm(myformula, data = df_merge)
+summary(mod_noT)
+residualPlot(mod_noT)
+
+# Model with Transformed Non-Linear Variables
+mod_T <- lm(DIF_rank~PopulationT + rate_nat_increase + tot_fert_rateT + life_exp_males + life_exp_females + death_rate + Clean_energy_access_prop + Harmful_air_mean_concT + Mortality_homicide_rateT + Adult_obesity_rate + Tobacco_use_rate + Expenditure_health_perc + Mortality_suicide_rateT + Alcohol_consuption_liters + Univ_hc + tot_deaths + cpi_score, data = df_merge)
+summary(mod_T)
+residualPlot(mod_T)
+
+# Model Selection
+mod_noNA <- lm(DIF_rank~PopulationT + rate_nat_increase + tot_fert_rateT + life_exp_males + life_exp_females + death_rate + Clean_energy_access_prop + Harmful_air_mean_concT + Mortality_homicide_rateT + Adult_obesity_rate + Tobacco_use_rate + Expenditure_health_perc + Mortality_suicide_rateT + Alcohol_consuption_liters + Univ_hc + tot_deaths + cpi_scoreT, data = df_merge_noNA)
+# Summary matches model with missing data
+bw_aic2 = step(mod_noNA, direction = "backward")
+
+# AIC-Determined Model
+# ----- So different depending on using transformed or not
+mod_bwAIC <- lm(DIF_rank~PopulationT + rate_nat_increase + tot_fert_rateT + life_exp_females + death_rate + Mortality_homicide_rateT + Univ_hc, data = df_merge) # Use the full data set
+summary(mod_bwAIC)
+residualPlot(mod_bwAIC)
+
+# Final Model 
+ggpairs(df_merge[,c(24,3,25,6,7,10,16, 23)])
+```
+
+### Investigate Groupings by Principal Component Analysis
+```{r}
+# Non-Transformed Data
+pcp = prcomp(df_merge_noNA[, -c(1,16,19,20,21,22,23,24,25,26,27)], center = TRUE, scale = TRUE)
+biplot(pcp, cex = 0.5, xlabs = df_merge_noNA$country)
+
+# Transformed Data
+pcpT = prcomp(df_merge_noNA[, -c(1,2,4,9,10,14,18,16,19,20,21)], center = TRUE, scale = TRUE)
+biplot(pcpT, cex = 0.5, xlabs = df_merge_noNA$country)
+
+# Final Model (Excluding categorical variable)
+pcpT = prcomp(df_merge_noNA[, -c(1:7,9:20,21)], center = TRUE, scale = TRUE)
+biplot(pcpT, cex = 0.5, xlabs = df_merge_noNA$country)
+```  
+
+
+### Check Multicollinearity 
+```{r}
+vif(mod_bwAIC)
+```
+
+### Investigate the Countries that are High Leverage Points
+```{r}
+influencePlot(mod_bwAIC, col=c(1,1))
+
+"Low Leverage/High Residuals:"
+df_merge[66,1]
+"High Leverage/Low Residuals:"
+df_merge[90,1]
+"High Residual/Low Leverage/High Cooks Distance"
+df_merge[124,1]
+"High Residual/High Cooks Distance:"
+df_merge[15,1]
+"High Leverage/High Cooks Distance/Low Residual:"
+df_merge[107,1]
+
+# We see know reason to remove these countries, however we will examine them and also view them in light of the models
+```
+
+### Investigate Subsets of Countries
+
+As the biplot showed, there was clustering of countries based on their economic 
+development status, therefore we are interested in investigating how subsets
+of countries divided by their economic development status influences the model.
+We subsetted countries into thirds by their GDP rank, then fitted the final
+model on each subset.
+```{r, warning = FALSE}
+df_merge_first <- subset(df_merge, GDP_rank < 74)
+df_merge_second <- subset(df_merge, GDP_rank < 138 & GDP_rank > 74)
+df_merge_third <- subset(df_merge, GDP_rank > 138)
+
+"First Subset Model"
+mod_first <- lm(DIF_rank~PopulationT + rate_nat_increase + tot_fert_rateT + life_exp_females + death_rate + Mortality_homicide_rateT + Univ_hc, data = df_merge_first)
+summary(mod_first)
+residualPlot(mod_first)
+
+"Second Subset Model"
+mod_second <- lm(DIF_rank~PopulationT + rate_nat_increase + tot_fert_rateT + life_exp_females + death_rate + Mortality_homicide_rateT + Univ_hc, data = df_merge_second)
+summary(mod_second)
+residualPlot(mod_second)
+
+"Third Subset Model"
+mod_third <- lm(DIF_rank~PopulationT + rate_nat_increase + tot_fert_rateT + life_exp_females + death_rate + Mortality_homicide_rateT + Univ_hc, data = df_merge_third)
+summary(mod_third)
+residualPlot(mod_third)
+
+# The model only fulfills assumptions about residuals for the middle subset of our data.
+```
+
+### Remodeling By Subset
+```{r}
+# Subset 1: Model Selection
+df_merge_firstnoNA <- na.omit(df_merge_first)
+mod_S1 <- lm(DIF_rank~PopulationT + rate_nat_increase + tot_fert_rateT + life_exp_males + life_exp_females + death_rate + Clean_energy_access_prop + Harmful_air_mean_concT + Mortality_homicide_rateT + Adult_obesity_rate + Tobacco_use_rate + Expenditure_health_perc + Mortality_suicide_rateT + Alcohol_consuption_liters + Univ_hc + tot_deaths + cpi_scoreT, data = df_merge_firstnoNA)
+
+bw_aicS1 = step(mod_S1, direction = "backward")
+# ---- Final Model: Mortality_suicide_rateT, life_exp_females, life_exp_males,
+# Clean_energy_access_prop, cpi_scoreT, Adult_obesity_rate, Univ_hc
+
+```
+
+
+```{r}
+bw_aicS1_mod <- lm(DIF_rank~life_exp_males + life_exp_females + Clean_energy_access_prop + Adult_obesity_rate + Mortality_suicide_rateT + Univ_hc + tot_deaths + cpi_scoreT, data = df_merge_first)
+summary(bw_aicS1_mod)
+plot(bw_aicS1_mod$residuals ~ bw_aicS1_mod$fitted.values)
+vif(bw_aicS1_mod)
+```
+
+
+```{r}
+
+# Subset 2: Model Selection
+df_merge_secondnoNA <- na.omit(df_merge_second)
+mod_S2 <- lm(DIF_rank~PopulationT + rate_nat_increase + tot_fert_rateT + life_exp_males + life_exp_females + death_rate + Clean_energy_access_prop + Harmful_air_mean_concT + Mortality_homicide_rateT + Adult_obesity_rate + Tobacco_use_rate + Expenditure_health_perc + Mortality_suicide_rateT + Alcohol_consuption_liters + Univ_hc + tot_deaths + cpi_scoreT, data = df_merge_secondnoNA)
+
+bw_aicS2 = step(mod_S2, direction = "backward")
+# ---- Final Model: Mortality_suicide_rateT, life_exp_females, death_rate,
+# tot_fert_rateT, Clean_energy_access_prop, cpi_scoreT, Mortality_homicide_rateT
+
+```
+
+
+```{r}
+bw_aicS2_mod <- lm(DIF_rank~tot_fert_rateT + life_exp_females + death_rate + Mortality_homicide_rateT + Expenditure_health_perc + Alcohol_consuption_liters + cpi_scoreT, data = df_merge_second)
+summary(bw_aicS2_mod)
+plot(bw_aicS2_mod$residuals ~ bw_aicS2_mod$fitted.values)
+vif(bw_aicS2_mod)
+```
+
+
+```{r}
+
+# Subset 3: Model Selection
+df_merge_thirdnoNA <- na.omit(df_merge_third)
+mod_S3 <- lm(DIF_rank~PopulationT + rate_nat_increase + tot_fert_rateT + life_exp_males + life_exp_females + death_rate + Clean_energy_access_prop + Harmful_air_mean_concT + Mortality_homicide_rateT + Adult_obesity_rate + Tobacco_use_rate + Expenditure_health_perc + Mortality_suicide_rateT + Alcohol_consuption_liters + Univ_hc + tot_deaths + cpi_scoreT, data = df_merge_thirdnoNA)
+
+bw_aicS3 = step(mod_S3, direction = "backward")
+# ---- Final Model: Mortality_suicide_rateT, life_exp_females, life_exp_males, tot_deaths,
+# rate_nat_increase, tot_fert_rateT, Adult_obesity_rate, Clean_energy_access_prop
+```
+```{r}
+bw_aicS3_mod <- lm(DIF_rank~rate_nat_increase + tot_fert_rateT + life_exp_males + life_exp_females + Clean_energy_access_prop + Adult_obesity_rate + tot_deaths, data = df_merge_third)
+summary(bw_aicS3_mod)
+plot(bw_aicS3_mod$residuals ~ bw_aicS3_mod$fitted.values)
+vif(bw_aicS3_mod)
+
+df_merge_second
+
+```
+```{r}
+## Looking at remaining outliers from individual models
+
+influencePlot(bw_aicS1_mod, col=c(1,1))
+
+"High Residual, high cooks distance"
+df_merge[122, 1]
+df_merge[59, 1]
+
+"High Leverage, low residual, low studentized residual"
+df_merge[95, 1]
+df_merge[101, 1]
+
+influencePlot(bw_aicS2_mod, col=c(1,1))
+"High Residual, high cooks distance"
+df_merge[121, 1]
+df_merge[15, 1]
+
+"High Leverage, low residual, low studentized residual"
+df_merge[37, 1]
+df_merge[41, 1]
+         
+influencePlot(bw_aicS3_mod, col=c(1,1))
+"High Residual, high cooks distance, low leverage"
+df_merge[127, 1]
+df_merge[89, 1]
+df_merge[64, 1]
+
+"High Leverage, low residual, low studentized residual"
+df_merge[52, 1]
+```
+
+
+### Model Diagnostics
+```{r}
+par(mfrow=c(2,2))
+plot(mod_bwAIC)
+```
+
+
+
+
+
+
